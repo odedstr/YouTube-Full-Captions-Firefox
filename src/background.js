@@ -1,25 +1,46 @@
-let script_inserted = false;
-let full_captions_active = false;
+// background.js (MV2, Firefox)
+let tabStates = {};
 
-chrome.browserAction.onClicked.addListener((tab) => {
-	if (!script_inserted) {
-		script_inserted = true;
-
-		chrome.tabs.executeScript(tab.id, { file: "content.js" });
-	}
-
-	if (!full_captions_active) {
-		full_captions_active = true;
-
-		chrome.tabs.removeCSS(tab.id, { file: "content.css" }, () => {
-			chrome.tabs.insertCSS(tab.id, { file: "content.css" });
+function execScript(tabId, file) {
+	return new Promise((resolve, reject) => {
+		chrome.tabs.executeScript(tabId, { file }, () => {
+			if (chrome.runtime.lastError) return reject(chrome.runtime.lastError);
+			resolve();
 		});
+	});
+}
 
-		chrome.tabs.sendMessage(tab.id, { message: "turnOn" });
-	} else {
-		chrome.tabs.removeCSS(tab.id, { file: "content.css" });
+function insertCss(tabId, file) {
+	return new Promise((resolve, reject) => {
+		chrome.tabs.insertCSS(tabId, { file }, () => {
+			if (chrome.runtime.lastError) return reject(chrome.runtime.lastError);
+			resolve();
+		});
+	});
+}
 
-		chrome.tabs.sendMessage(tab.id, { message: "turnOff" });
-		full_captions_active = false;
+chrome.browserAction.onClicked.addListener(async (tab) => {
+	try {
+		const state = (tabStates[tab.id] ||= { active: false });
+
+		if (!state.active) {
+			// ON: inject, then message
+			await execScript(tab.id, "content.js");
+			await insertCss(tab.id, "content.css");
+			chrome.tabs.sendMessage(tab.id, { message: "turnOn" });
+			state.active = true;
+		} else {
+			// OFF: reload tab
+			chrome.tabs.reload(tab.id);
+			state.active = false;
+		}
+	} catch (e) {
+		console.error("[YTFULLCAP] injection failed:", e);
 	}
+});
+
+// cleanup/reset on close/reload
+chrome.tabs.onRemoved.addListener((tabId) => delete tabStates[tabId]);
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+	if (changeInfo.status === "loading") delete tabStates[tabId];
 });
