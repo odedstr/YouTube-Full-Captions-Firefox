@@ -1,0 +1,43 @@
+.youtube-full-captions-container{
+	position: absolute;
+	left: 0;
+	top: 82.2%;
+	width: 100%;
+	height: 50px;
+	z-index: 1000;
+	pointer-events: none;
+}
+
+.youtube-full-captions-container .youtube-full-captions-text{
+	padding: 10px;
+	background: #0000009c;
+	color: white;
+	font-size: 2.1em;
+	font-weight: 500;
+	width: fit-content;
+	text-align: center;
+	margin: 0 auto;
+	cursor: grab;
+	pointer-events: auto;
+	user-select: none;
+}
+.youtube-full-captions-container .youtube-full-captions-text.outside-container {
+	width: calc(100% - 20px); /* Because the padding is 10px, 100% is bigger wider the player */
+	background: black;
+}
+
+/* Hide the extension fullscreen and theater mode caption when we are in default view */
+ytd-watch-flexy:not([theater]):not([fullscreen]) .youtube-full-captions-container-fullscreen .youtube-full-captions-container{
+	display: none;
+}
+
+/* Hide the original captions */
+.caption-window.ytp-caption-window-bottom{
+	display: none;
+}
+*[target-id="engagement-panel-searchable-transcript"]{
+	visibility: hidden;
+	width: 1px;
+	position: absolute;
+}
+
