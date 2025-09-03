@@ -11,15 +11,19 @@
 	window.__YTFULLCAP_BOOTED__ = true;
 	console.log("[YTFULLCAP] content.js loaded");
 
-	// Store long-lived handles so we don't reattach observers/listeners
+	// Long-lived handles / state
 	const H = (window.__YTFULLCAP_HANDLES__ ||= {
 		on: false,
 		resizeObserver: null,
 		fullscreenResizeObserver: null,
-		activeClassObserver: null,
 		stopMonitorMain: null,
 		stopMonitorFull: null,
 		hideTimeout: null,
+		// Time-based transcript sync
+		segments: [],
+		currentSegIndex: -1,
+		segmentsObserver: null,
+		videoListener: null,
 	});
 
 	api.runtime.onMessage.addListener(async (req) => {
@@ -39,6 +43,7 @@
 		}
 	});
 
+	// ---------- Helpers ----------
 	function waitForElement(selector, timeout = 30000) {
 		return new Promise((resolve, reject) => {
 			const intervalTime = 100;
@@ -130,24 +135,101 @@
 		});
 	}
 
+	// Timestamp parsing: "mm:ss" or "hh:mm:ss" → seconds
+	function parseTimestamp(text) {
+		const parts = text.trim().split(":").map(p => parseInt(p, 10));
+		if (!parts.length || parts.some(Number.isNaN)) return null;
+		return parts.reduce((acc, v) => acc * 60 + v, 0);
+	}
+
+	// Build transcript index (start seconds → HTML text)
+	function buildTranscriptIndex() {
+		const nodes = document.querySelectorAll("ytd-transcript-segment-renderer");
+		const segs = [];
+		nodes.forEach((node) => {
+			const tsEl = node.querySelector(".segment-timestamp");
+			const txtEl = node.querySelector(".segment-text");
+			if (!tsEl || !txtEl) return;
+			const t = parseTimestamp(tsEl.textContent || "");
+			if (t === null) return;
+			segs.push({ start: t, html: txtEl.innerHTML });
+		});
+		segs.sort((a, b) => a.start - b.start);
+		H.segments = segs;
+		H.currentSegIndex = -1;
+		// console.log("[YTFULLCAP] transcript indexed:", segs.length, "segments");
+	}
+
+	// Binary search for current segment by time 't'
+	function indexForTime(t) {
+		const segs = H.segments;
+		if (!segs || segs.length === 0) return -1;
+		let lo = 0, hi = segs.length - 1, ans = -1;
+		while (lo <= hi) {
+			const mid = (lo + hi) >> 1;
+			if (segs[mid].start <= t) { ans = mid; lo = mid + 1; }
+			else { hi = mid - 1; }
+		}
+		return ans;
+	}
+
+	// Attach a single timeupdate listener (idempotent)
+	function startTimeSync(video, allCaptionTexts) {
+		if (H.videoListener) return;
+
+		H.videoListener = () => {
+			if (!H.segments || H.segments.length === 0) return;
+			const t = video.currentTime || 0;
+			const i = indexForTime(t);
+			if (i < 0 || i === H.currentSegIndex) return;
+
+			H.currentSegIndex = i;
+			const html = H.segments[i].html;
+			allCaptionTexts.forEach((el) => {
+				if (H.hideTimeout) clearTimeout(H.hideTimeout);
+				el.style.display = "block";
+				el.innerHTML = html;
+			});
+			H.hideTimeout = setTimeout(() => {
+				allCaptionTexts.forEach(el => { el.style.display = "none"; });
+			}, 7000);
+		};
+
+		video.addEventListener("timeupdate", H.videoListener);
+	}
+
+	// Observe transcript changes (e.g., language switch) to rebuild index
+	function observeTranscriptChanges(listEl) {
+		if (H.segmentsObserver) return;
+		H.segmentsObserver = new MutationObserver((muts) => {
+			for (const m of muts) {
+				if (m.type === "childList") {
+					buildTranscriptIndex();
+					break;
+				}
+			}
+		});
+		H.segmentsObserver.observe(listEl, { childList: true, subtree: true });
+	}
+
+	// ---------- Main ----------
 	async function turnOn() {
 		// Ensure CC is on
 		await waitForElement("button.ytp-subtitles-button", -1);
 		const ccBtn = document.querySelector('button.ytp-subtitles-button[aria-pressed="false"]');
 		if (ccBtn) ccBtn.click();
 
-		// Open transcript panel (if present)
+		// Try to open transcript panel (some videos won’t have it)
 		const transcriptBtnSel = "#structured-description .ytd-video-description-transcript-section-renderer button";
 		try {
 			await waitForElement(transcriptBtnSel, 8000);
 			const transcriptBtn = document.querySelector(transcriptBtnSel);
 			if (transcriptBtn) transcriptBtn.click();
 		} catch {
-			// Some videos have no transcript entry; continue gracefully
 			console.warn("[YTFULLCAP] transcript button not found (continuing)");
 		}
 
-		// Main player container
+		// Create/reuse caption containers
 		await waitForElement("#player", -1);
 		await waitForElement(".caption-window.ytp-caption-window-bottom", -1);
 
@@ -158,13 +240,12 @@
 			captionsContainer.classList.add("youtube-full-captions-container");
 			captionsContainer.innerHTML = "<div class='youtube-full-captions-text'>Loading...</div>";
 			player.appendChild(captionsContainer);
-
 			redirectClickEventOnElement(captionsContainer);
 			makeDivDraggable(captionsContainer);
 		}
 		const captionsText = captionsContainer.querySelector(".youtube-full-captions-text");
 
-		// Fullscreen player container
+		// Fullscreen overlay
 		const fullPlayer = document.querySelector("#player-full-bleed-container");
 		let fullCaptionsContainer = fullPlayer.querySelector(".youtube-full-captions-container");
 		if (!fullCaptionsContainer) {
@@ -175,38 +256,32 @@
 		}
 		const fullCaptionsText = fullCaptionsContainer.querySelector(".youtube-full-captions-text");
 
-		// Apply outside/inside class toggling once
+		// Outside/inside class toggling (attach once)
 		if (!H.stopMonitorMain) {
 			H.stopMonitorMain = monitorElementPosition(
-				captionsText,
-				player,
+				captionsText, player,
 				(el) => el.classList.add("outside-container"),
-				(el) => el.classList.remove("outside-container")
+				(el) => el.classList.remove("outside-container"),
 			);
 		}
 		if (!H.stopMonitorFull) {
 			H.stopMonitorFull = monitorElementPosition(
-				fullCaptionsText,
-				fullPlayer,
+				fullCaptionsText, fullPlayer,
 				(el) => el.classList.add("outside-container"),
-				(el) => el.classList.remove("outside-container")
+				(el) => el.classList.remove("outside-container"),
 			);
 		}
 
-		// Resize observers once
+		// Resize observers (attach once)
 		if (!H.resizeObserver) {
 			H.resizeObserver = new ResizeObserver((entries) => {
-				for (const entry of entries) {
-					adjustFontSize(entry, 3, captionsText, 13.71, 27.35);
-				}
+				for (const entry of entries) adjustFontSize(entry, 3, captionsText, 13.71, 27.35);
 			});
 			H.resizeObserver.observe(player);
 		}
 		if (!H.fullscreenResizeObserver) {
 			H.fullscreenResizeObserver = new ResizeObserver((entries) => {
-				for (const entry of entries) {
-					adjustFontSize(entry, 3, fullCaptionsText, 13.71, 35);
-				}
+				for (const entry of entries) adjustFontSize(entry, 3, fullCaptionsText, 13.71, 35);
 			});
 			H.fullscreenResizeObserver.observe(fullPlayer);
 		}
@@ -215,37 +290,20 @@
 			".youtube-full-captions-container .youtube-full-captions-text"
 		);
 
-		function copyContents() {
-			const active = document.querySelector(".ytd-transcript-segment-list-renderer.active");
-			if (!active) return;
-			allCaptionTexts.forEach((el) => {
-				if (H.hideTimeout !== null) clearTimeout(H.hideTimeout);
-				el.style.display = "block";
-				const src = active.querySelector("yt-formatted-string");
-				el.innerHTML = src ? src.innerHTML : "";
-				H.hideTimeout = setTimeout(() => {
-					el.style.display = "none";
-				}, 7000);
-			});
+		// Build transcript index & start time-based sync
+		try {
+			const listEl = await waitForElement("#segments-container.ytd-transcript-segment-list-renderer", 10000);
+			buildTranscriptIndex();
+			observeTranscriptChanges(listEl);
+		} catch {
+			console.warn("[YTFULLCAP] transcript segments not found (continuing; no captions will show)");
 		}
 
-		// Observe transcript list once (if present)
-		try {
-			await waitForElement("#segments-container.ytd-transcript-segment-list-renderer", 10000);
-			if (!H.activeClassObserver) {
-				const parent = document.querySelector("#segments-container.ytd-transcript-segment-list-renderer");
-				H.activeClassObserver = new MutationObserver((mutations) => {
-					for (const m of mutations) {
-						if (m.type === "attributes" && m.attributeName === "class") {
-							copyContents();
-							break;
-						}
-					}
-				});
-				H.activeClassObserver.observe(parent, { attributes: true, childList: true, subtree: true });
-			}
-		} catch {
-			console.warn("[YTFULLCAP] transcript segments not found (continuing)");
+		const video = document.querySelector("video");
+		if (video) {
+			startTimeSync(video, allCaptionTexts);
+		} else {
+			console.warn("[YTFULLCAP] <video> element not found");
 		}
 	}
 })();
