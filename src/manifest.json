@@ -29,8 +29,7 @@
     "activeTab",
     "tabs",
     "storage",
-    "contextMenus",
-    "windows"
+    "contextMenus"
   ],
   "host_permissions": [
     "*://*.youtube.com/*"
@@ -54,6 +53,9 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "youtube-full-captions@odedstreigold",
+      "data_collection_permissions": {
+        "required": ["none"]
+      },
       "strict_min_version": "128.0"
     }
   }

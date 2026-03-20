@@ -296,7 +296,7 @@
 
 			segs.push({
 				start: t,
-				html: txtEl.innerHTML
+				text: txtEl.textContent || ""
 			});
 		});
 
@@ -331,13 +331,12 @@
 			if (i < 0 || i === H.currentSegIndex) return;
 
 			H.currentSegIndex = i;
-			const html = H.segments[i].html;
+			const text = H.segments[i].text;
 			allCaptionTexts.forEach((el) => {
 				if (H.hideTimeout) clearTimeout(H.hideTimeout);
 				el.style.display = "block";
-				el.innerHTML = html;
-			});
-			H.hideTimeout = setTimeout(() => {
+				el.textContent = text;
+			});			H.hideTimeout = setTimeout(() => {
 				allCaptionTexts.forEach(el => { el.style.display = "none"; });
 			}, 7000);
 		};
