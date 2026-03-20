@@ -1,76 +1,93 @@
-// background.js (MV2, Firefox)
-let tabStates = {};
+const api = typeof browser !== "undefined" ? browser : chrome;
 
-const ICONS_OFF = {
-	16:  "images/icon-16.png",
-	32:  "images/icon-32.png",
-	48:  "images/icon-48.png",
-	128: "images/icon-128.png",
-};
-const ICONS_ON = {
-	16:  "images/icon-on-16.png",
-	32:  "images/icon-on-32.png",
-	48:  "images/icon-on-48.png",
-	128: "images/icon-on-128.png",
-};
+const ICONS_OFF = {16:"images/icon-16.png",32:"images/icon-32.png",48:"images/icon-48.png",128:"images/icon-128.png"};
+const ICONS_ON  = {16:"images/icon-on-16.png",32:"images/icon-on-32.png",48:"images/icon-on-48.png",128:"images/icon-on-128.png"};
+const activeTabs = new Map();
 
-function syncIcon(tabId) {
-	const active = !!(tabStates[tabId] && tabStates[tabId].active);
-	chrome.browserAction.setIcon({ tabId, path: active ? ICONS_ON : ICONS_OFF });
-	chrome.browserAction.setTitle({
-		tabId,
-		title: active
-			? "YouTube Full Captions — ON (click to turn OFF)"
-			: "YouTube Full Captions — OFF (click to turn ON)",
-	});
+function isYouTube(url) {
+  return /:\/\/(www\.)?youtube\.com\//i.test(url || "");
 }
 
-function execScript(tabId, file) {
-	return new Promise((resolve, reject) => {
-		chrome.tabs.executeScript(tabId, { file }, () => {
-			if (chrome.runtime.lastError) return reject(chrome.runtime.lastError);
-			resolve();
-		});
-	});
+async function setActive(tabId, active) {
+  if (active) activeTabs.set(tabId, true);
+  else activeTabs.delete(tabId);
+
+  await api.action.setIcon({ tabId, path: active ? ICONS_ON : ICONS_OFF });
+  await api.action.setTitle({
+    tabId,
+    title: active
+      ? "YouTube Full Captions — ON (click to turn OFF)"
+      : "YouTube Full Captions — OFF (click to turn ON)"
+  });
 }
 
-function insertCss(tabId, file) {
-	return new Promise((resolve, reject) => {
-		chrome.tabs.insertCSS(tabId, { file }, () => {
-			if (chrome.runtime.lastError) return reject(chrome.runtime.lastError);
-			resolve();
-		});
-	});
+function isActive(tabId) {
+  return !!activeTabs.get(tabId);
 }
 
-chrome.browserAction.onClicked.addListener(async (tab) => {
-	try {
-		const state = (tabStates[tab.id] ||= { active: false });
+async function resetTabUi(tabId) {
+  activeTabs.delete(tabId);
+  try {
+    await api.action.setIcon({ tabId, path: ICONS_OFF });
+    await api.action.setTitle({ tabId, title: "YouTube Full Captions — OFF (click to turn ON)" });
+    await api.action.setBadgeText({ tabId, text: "" });
+  } catch (_) {}
+}
 
-		if (!state.active) {
-			// ON: inject, then message
-			await execScript(tab.id, "content.js");
-			await insertCss(tab.id, "content.css");
-			chrome.tabs.sendMessage(tab.id, { message: "turnOn" });
-			state.active = true;
-			syncIcon(tab.id);
-		} else {
-			// OFF: reload tab
-			chrome.tabs.reload(tab.id);
-			state.active = false;
-			syncIcon(tab.id);
-		}
-	} catch (e) {
-		console.error("[YTFULLCAP] injection failed:", e);
-	}
+api.runtime.onInstalled.addListener(() => {
+  try {
+    api.contextMenus.create({
+      id: "ytfc-settings",
+      title: "Caption Settings…",
+      contexts: ["action"]
+    });
+  } catch (e) {
+    console.warn("[YTFULLCAP] context menu create failed:", e);
+  }
 });
 
-// Keep icon state accurate on tab changes/reloads/close
-chrome.tabs.onActivated.addListener(({ tabId }) => syncIcon(tabId));
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-	if (changeInfo.status === "loading") {
-		delete tabStates[tabId];   // reset on reload (your earlier logic)
-		syncIcon(tabId);           // show OFF icon during load
-	}
+api.contextMenus.onClicked.addListener((info) => {
+  if (info.menuItemId !== "ytfc-settings") return;
+  api.runtime.openOptionsPage().catch((e) => {
+    console.error("[YTFULLCAP] openOptionsPage failed:", e);
+  });
 });
-chrome.tabs.onRemoved.addListener((tabId) => { delete tabStates[tabId]; });
+
+api.action.onClicked.addListener(async (tab) => {
+  if (!tab || !isYouTube(tab.url)) {
+    if (tab?.id != null) {
+      await api.action.setBadgeText({ tabId: tab.id, text: "!" });
+      setTimeout(() => {
+        api.action.setBadgeText({ tabId: tab.id, text: "" }).catch(() => {});
+      }, 800);
+    }
+    return;
+  }
+
+  if (!isActive(tab.id)) {
+    try {
+      await api.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+      await api.scripting.insertCSS({ target: { tabId: tab.id }, files: ["content.css"] });
+      await api.tabs.sendMessage(tab.id, { message: "turnOn" });
+      await setActive(tab.id, true);
+    } catch (e) {
+      console.error("[YTFULLCAP] inject failed:", e);
+    }
+  } else {
+    try {
+      await api.tabs.reload(tab.id);
+    } finally {
+      await setActive(tab.id, false);
+    }
+  }
+});
+
+api.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  if (changeInfo.status === "loading") {
+    await resetTabUi(tabId);
+  }
+});
+
+api.tabs.onRemoved.addListener((tabId) => {
+  activeTabs.delete(tabId);
+});

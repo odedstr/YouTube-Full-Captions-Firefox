@@ -3,6 +3,8 @@
 	// Cross-browser API alias
 	const api = typeof browser !== "undefined" ? browser : chrome;
 
+
+
 	// Prevent duplicate injection across reinjections
 	if (window.__YTFULLCAP_BOOTED__) {
 		console.log("[YTFULLCAP] duplicate injection ignored");
@@ -26,21 +28,109 @@
 		videoListener: null,
 	});
 
-	api.runtime.onMessage.addListener(async (req) => {
-		if (req.message === "turnOn") {
-			if (H.on) {
-				console.log("[YTFULLCAP] already ON, ignoring");
-				return;
-			}
-			H.on = true;
-			try {
-				await turnOn();
-			} catch (e) {
-				console.error("[YTFULLCAP] turnOn failed:", e);
-			}
-		} else if (req.message === "turnOff") {
-			location.reload();
+	const DEFAULTS = {
+		fontScale: 1.0,
+		fontPreset: "system-sans", // <- NEW
+		fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
+		fontColor: "#ffffff",
+		fontWeight: "500",
+		bgOpacity: 0.61
+	};
+	H.settings = { ...DEFAULTS };
+
+	async function loadSettings() {
+		try {
+			const data = await api.storage.sync.get(Object.keys(DEFAULTS));
+			H.settings = { ...DEFAULTS, ...(data || {}) };
+		} catch {
+			H.settings = { ...DEFAULTS };
 		}
+		return H.settings;
+	}
+
+	function resolveFamily(settings) {
+		switch (settings.fontPreset) {
+			case "inherit":     return null; // means don't set inline
+			case "system-serif":return "ui-serif, Georgia, 'Times New Roman', Times, serif";
+			case "system-mono": return "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace";
+			case "system-sans":
+			default:
+				// Prefer stored fontFamily if present; else system-sans
+				return settings.fontFamily || "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
+		}
+	}
+
+	function applyStylesTo(el) {
+		if (!el) return;
+		const fam = resolveFamily(H.settings);
+
+		if (fam === null) {
+			// Remove any previous inline font-family so YouTube’s default takes over
+			el.style.removeProperty("font-family");
+		} else {
+			el.style.fontFamily = fam;
+		}
+
+		el.style.color = H.settings.fontColor;
+		el.style.fontWeight = H.settings.fontWeight;
+		el.style.background = `rgba(0,0,0,${H.settings.bgOpacity})`;
+	}
+
+
+
+
+
+
+	// Unified, async onMessage handler
+	api.runtime.onMessage.addListener((req) => {
+		if (!req || !req.message) return;
+
+		(async () => {
+			switch (req.message) {
+				case "ytfc:applySettings": {
+					await loadSettings();
+
+					// Re-apply styles to all caption nodes
+					document.querySelectorAll(".youtube-full-captions-text").forEach(applyStylesTo);
+
+					// Recompute font size now (no reliance on resize)
+					const captionsText     = document.querySelector("#player .youtube-full-captions-text");
+					const fullCaptionsText = document.querySelector("#player-full-bleed-container .youtube-full-captions-text");
+					const player           = document.querySelector("#player");
+					const fullPlayer       = document.querySelector("#player-full-bleed-container");
+
+					recomputeFontSizeNow(player,     captionsText,     13.71, 27.35);
+					recomputeFontSizeNow(fullPlayer, fullCaptionsText, 13.71, 35);
+
+					// Optional: nudge any observers
+					window.dispatchEvent(new Event("resize"));
+					break;
+				}
+
+				case "turnOn": {
+					if (H.on) {
+						console.log("[YTFULLCAP] already ON, ignoring");
+						break;
+					}
+					H.on = true;
+					try {
+						await turnOn();
+					} catch (e) {
+						console.error("[YTFULLCAP] turnOn failed:", e);
+					}
+					break;
+				}
+
+				case "turnOff": {
+					location.reload();
+					break;
+				}
+
+				default:
+					// no-op
+					break;
+			}
+		})().catch((e) => console.error("[YTFULLCAP] onMessage error:", e));
 	});
 
 	// ---------- Helpers ----------
@@ -62,11 +152,39 @@
 		});
 	}
 
+	function getScale() {
+		const s = H.settings?.fontScale ?? 1;
+		return Math.max(0.5, Math.min(2, Number(s) || 1));
+	}
+
+
 	function adjustFontSize(entry, percentage, textElement, minPx, maxPx) {
-		const containerWidth = entry.target.offsetWidth;
-		let fontSize = containerWidth * (percentage / 100);
-		fontSize = Math.max(minPx, Math.min(fontSize, maxPx));
-		textElement.style.fontSize = fontSize + "px";
+		const scale = getScale();
+		const minScaled = minPx * scale;
+		const maxScaled = maxPx * scale;
+
+		const width = entry.target.offsetWidth;
+		let fontSize = width * (percentage / 100) * scale;
+
+		if (Number.isFinite(minScaled)) fontSize = Math.max(minScaled, fontSize);
+		if (Number.isFinite(maxScaled)) fontSize = Math.min(maxScaled, fontSize);
+
+		textElement.style.fontSize = `${fontSize}px`;
+	}
+
+	function recomputeFontSizeNow(containerEl, textEl, minPx, maxPx) {
+		if (!containerEl || !textEl) return;
+		const scale = getScale();
+		const minScaled = minPx * scale;
+		const maxScaled = maxPx * scale;
+
+		const width = containerEl.offsetWidth || containerEl.getBoundingClientRect().width || 0;
+		let fontSize = width * (3 / 100) * scale;
+
+		if (Number.isFinite(minScaled)) fontSize = Math.max(minScaled, fontSize);
+		if (Number.isFinite(maxScaled)) fontSize = Math.min(maxScaled, fontSize);
+
+		textEl.style.fontSize = `${fontSize}px`;
 	}
 
 	function monitorElementPosition(element, container, onOut, onIn) {
@@ -143,21 +261,50 @@
 	}
 
 	// Build transcript index (start seconds → HTML text)
+	function getTranscriptPanel() {
+		return (
+			document.querySelector(
+				'ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"]'
+			) ||
+			document.querySelector(
+				'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]'
+			)
+		);
+	}
+
 	function buildTranscriptIndex() {
-		const nodes = document.querySelectorAll("ytd-transcript-segment-renderer");
+		const panel = getTranscriptPanel();
+
+		if (!panel) {
+			H.segments = [];
+			H.currentSegIndex = -1;
+			console.warn("[YTFULLCAP] transcript panel not found");
+			return;
+		}
+
+		const nodes = panel.querySelectorAll("transcript-segment-view-model");
 		const segs = [];
+
 		nodes.forEach((node) => {
-			const tsEl = node.querySelector(".segment-timestamp");
-			const txtEl = node.querySelector(".segment-text");
+			const tsEl = node.querySelector(".ytwTranscriptSegmentViewModelTimestamp");
+			const txtEl = node.querySelector("span.yt-core-attributed-string");
+
 			if (!tsEl || !txtEl) return;
+
 			const t = parseTimestamp(tsEl.textContent || "");
 			if (t === null) return;
-			segs.push({ start: t, html: txtEl.innerHTML });
+
+			segs.push({
+				start: t,
+				html: txtEl.innerHTML
+			});
 		});
+
 		segs.sort((a, b) => a.start - b.start);
 		H.segments = segs;
 		H.currentSegIndex = -1;
-		// console.log("[YTFULLCAP] transcript indexed:", segs.length, "segments");
+
+		console.log("[YTFULLCAP] built segments:", segs.length);
 	}
 
 	// Binary search for current segment by time 't'
@@ -201,6 +348,7 @@
 	// Observe transcript changes (e.g., language switch) to rebuild index
 	function observeTranscriptChanges(listEl) {
 		if (H.segmentsObserver) return;
+
 		H.segmentsObserver = new MutationObserver((muts) => {
 			for (const m of muts) {
 				if (m.type === "childList") {
@@ -209,13 +357,17 @@
 				}
 			}
 		});
+
 		H.segmentsObserver.observe(listEl, { childList: true, subtree: true });
 	}
 
 	// ---------- Main ----------
 	async function turnOn() {
+		console.log("[YTFULLCAP] turnOn start");
+		await loadSettings();
 		// Ensure CC is on
 		await waitForElement("button.ytp-subtitles-button", -1);
+		console.log("[YTFULLCAP] subtitles button found");
 		const ccBtn = document.querySelector('button.ytp-subtitles-button[aria-pressed="false"]');
 		if (ccBtn) ccBtn.click();
 
@@ -225,13 +377,16 @@
 			await waitForElement(transcriptBtnSel, 8000);
 			const transcriptBtn = document.querySelector(transcriptBtnSel);
 			if (transcriptBtn) transcriptBtn.click();
+			console.log("[YTFULLCAP] transcript button clicked");
 		} catch {
 			console.warn("[YTFULLCAP] transcript button not found (continuing)");
 		}
 
 		// Create/reuse caption containers
 		await waitForElement("#player", -1);
+		console.log("[YTFULLCAP] player found");
 		await waitForElement(".caption-window.ytp-caption-window-bottom", -1);
+		console.log("[YTFULLCAP] original caption window found");
 
 		const player = document.querySelector("#player");
 		let captionsContainer = player.querySelector(".youtube-full-captions-container");
@@ -243,7 +398,9 @@
 			redirectClickEventOnElement(captionsContainer);
 			makeDivDraggable(captionsContainer);
 		}
+		console.log("[YTFULLCAP] captions container added");
 		const captionsText = captionsContainer.querySelector(".youtube-full-captions-text");
+
 
 		// Fullscreen overlay
 		const fullPlayer = document.querySelector("#player-full-bleed-container");
@@ -255,6 +412,18 @@
 			makeDivDraggable(fullCaptionsContainer);
 		}
 		const fullCaptionsText = fullCaptionsContainer.querySelector(".youtube-full-captions-text");
+		applyStylesTo(captionsText);
+		applyStylesTo(fullCaptionsText);
+
+		// recomputeFontSizeNow(player, captionsText, 13.71, 27.35);
+		// recomputeFontSizeNow(fullPlayer, fullCaptionsText, 13.71, 35);
+
+		// recomputeFontSizeNow(player,     captionsText,     8, 90);
+		// recomputeFontSizeNow(fullPlayer, fullCaptionsText, 8, 120);
+
+		recomputeFontSizeNow(player, captionsText, 8, 60);
+		recomputeFontSizeNow(fullPlayer, fullCaptionsText, 8, 80);
+
 
 		// Outside/inside class toggling (attach once)
 		if (!H.stopMonitorMain) {
@@ -275,16 +444,21 @@
 		// Resize observers (attach once)
 		if (!H.resizeObserver) {
 			H.resizeObserver = new ResizeObserver((entries) => {
-				for (const entry of entries) adjustFontSize(entry, 3, captionsText, 13.71, 27.35);
+				// for (const entry of entries) adjustFontSize(entry, 3, captionsText, 13.71, 27.35);
+				// for (const entry of entries) adjustFontSize(entry, 3, captionsText, 8, 90);
+				for (const e of entries) adjustFontSize(e, 3, captionsText, 8, 60);
 			});
 			H.resizeObserver.observe(player);
 		}
 		if (!H.fullscreenResizeObserver) {
 			H.fullscreenResizeObserver = new ResizeObserver((entries) => {
-				for (const entry of entries) adjustFontSize(entry, 3, fullCaptionsText, 13.71, 35);
+				// for (const entry of entries) adjustFontSize(entry, 3, fullCaptionsText, 13.71, 35);
+				// for (const entry of entries) adjustFontSize(entry, 3, fullCaptionsText, 8, 120);
+				for (const e of entries) adjustFontSize(e, 3, fullCaptionsText, 8, 80);
 			});
 			H.fullscreenResizeObserver.observe(fullPlayer);
 		}
+
 
 		const allCaptionTexts = document.querySelectorAll(
 			".youtube-full-captions-container .youtube-full-captions-text"
@@ -292,15 +466,42 @@
 
 		// Build transcript index & start time-based sync
 		try {
-			const listEl = await waitForElement("#segments-container.ytd-transcript-segment-list-renderer", 10000);
+			console.log("[YTFULLCAP] waiting for transcript panel");
+
+			const transcriptPanel = await Promise.any([
+				waitForElement(
+					'ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"]',
+					10000
+				),
+				waitForElement(
+					'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]',
+					10000
+				)
+			]);
+
+			console.log("[YTFULLCAP] transcript panel found");
+			console.log(
+				"[YTFULLCAP] transcript rows in PAmodern_transcript_view:",
+				document.querySelectorAll(
+					'ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"] transcript-segment-view-model'
+				).length
+			);
+			console.log(
+				"[YTFULLCAP] transcript rows in engagement-panel-searchable-transcript:",
+				document.querySelectorAll(
+					'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"] transcript-segment-view-model'
+				).length
+			);
+
 			buildTranscriptIndex();
-			observeTranscriptChanges(listEl);
+			observeTranscriptChanges(transcriptPanel);
 		} catch {
-			console.warn("[YTFULLCAP] transcript segments not found (continuing; no captions will show)");
+			console.warn("[YTFULLCAP] transcript panel not found (continuing; no captions will show)");
 		}
 
 		const video = document.querySelector("video");
 		if (video) {
+			console.log("[YTFULLCAP] video found:", !!video);
 			startTimeSync(video, allCaptionTexts);
 		} else {
 			console.warn("[YTFULLCAP] <video> element not found");

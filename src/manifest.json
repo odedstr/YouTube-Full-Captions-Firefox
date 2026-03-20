@@ -1,8 +1,8 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "name": "YouTube Full Captions",
+  "version": "1.0.0.0",
   "description": "Enhances YouTube's auto-generated subtitles to display line by line instead of word by word, for improved readability.",
-  "version": "0.0.0.2",
   "author": "Oded Streigold",
   "icons": {
     "16": "images/icon-16.png",
@@ -10,23 +10,51 @@
     "48": "images/icon-48.png",
     "128": "images/icon-128.png"
   },
-  "browser_action": {
+  "action": {
     "default_icon": {
       "16": "images/icon-16.png",
       "32": "images/icon-32.png",
       "48": "images/icon-48.png",
       "128": "images/icon-128.png"
-    }
+    },
+    "default_title": "YouTube Full Captions — OFF (click to turn ON)"
   },
   "background": {
-    "scripts": ["background.js"],
-    "persistent": false
+    "scripts": [
+      "background.js"
+    ]
   },
-  "permissions": ["activeTab", "tabs", "scripting"],
+  "permissions": [
+    "scripting",
+    "activeTab",
+    "tabs",
+    "storage",
+    "contextMenus",
+    "windows"
+  ],
+  "host_permissions": [
+    "*://*.youtube.com/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "settings.html",
+        "settings.js",
+        "settings.css"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "options_ui": {
+    "page": "settings.html",
+    "open_in_tab": true
+  },
   "browser_specific_settings": {
     "gecko": {
-      "id": "youtube-full-captions@odedstreigold",
-      "strict_min_version": "91.0"
+      "id": "youtube-full-captions@odedstreigold.local",
+      "strict_min_version": "128.0"
     }
   }
 }
