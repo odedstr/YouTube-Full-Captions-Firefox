@@ -287,7 +287,9 @@
 
 		nodes.forEach((node) => {
 			const tsEl = node.querySelector(".ytwTranscriptSegmentViewModelTimestamp");
-			const txtEl = node.querySelector("span.yt-core-attributed-string");
+			const txtEl = node.querySelector(
+				'span[role="text"], .ytAttributedStringHost, span.yt-core-attributed-string'
+			);
 
 			if (!tsEl || !txtEl) return;
 
@@ -336,7 +338,8 @@
 				if (H.hideTimeout) clearTimeout(H.hideTimeout);
 				el.style.display = "block";
 				el.textContent = text;
-			});			H.hideTimeout = setTimeout(() => {
+			});
+			H.hideTimeout = setTimeout(() => {
 				allCaptionTexts.forEach(el => { el.style.display = "none"; });
 			}, 7000);
 		};
