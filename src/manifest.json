@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Full Captions",
-  "version": "1.0.0.0",
+  "version": "1.0.0.1",
   "description": "Enhances YouTube's auto-generated subtitles to display line by line instead of word by word, for improved readability.",
   "author": "Oded Streigold",
   "icons": {
