@@ -5,7 +5,8 @@ const DEFAULTS = {
 	fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
 	fontColor: "#ffffff",
 	fontWeight: "500",
-	bgOpacity: 0.61
+	bgOpacity: 0.61,
+	captionExtraSeconds: 0
 };
 const PRESETS = {
 	Minimalistic: {
@@ -51,6 +52,7 @@ const fontColorHex   = document.querySelector("#fontColorHex");
 const fontWeightEl   = document.querySelector("#fontWeight");
 const bgOpacityEl    = document.querySelector("#bgOpacity");
 const bgOpacityValEl = document.querySelector("#bgOpacityVal");
+const captionExtraSecondsEl = document.querySelector("#captionExtraSeconds");
 
 function showScaleLabel(v) {
 	const num = clamp(Number(v) || 1, 0.5, 2);
@@ -59,6 +61,10 @@ function showScaleLabel(v) {
 function showOpacityLabel(v) {
 	const num = clamp(Number(v) || 0, 0, 1);
 	if (bgOpacityValEl) bgOpacityValEl.textContent = Math.round(num * 100) + "%";
+}
+function normalizeExtraSeconds(v) {
+	const num = Number(v);
+	return Number.isFinite(num) && num >= 0 ? num : DEFAULTS.captionExtraSeconds;
 }
 
 let fontFamilyCached = DEFAULTS.fontFamily;
@@ -72,11 +78,12 @@ function buildCfgFromUI() {
 		fontFamily: resolved ?? fontFamilyCached,
 		fontColor: (fontColorEl.value || DEFAULTS.fontColor).toLowerCase(),
 		fontWeight: fontWeightEl.value,
-		bgOpacity: clamp(parseFloat(bgOpacityEl.value), 0, 1)
+		bgOpacity: clamp(parseFloat(bgOpacityEl.value), 0, 1),
+		captionExtraSeconds: normalizeExtraSeconds(captionExtraSecondsEl.value)
 	};
 }
 
-function applyCfgToUI(cfg) {
+function applyCfgToUI(cfg, includeTiming = true) {
 	fontScaleEl.value  = cfg.fontScale;
 	showScaleLabel(cfg.fontScale);
 	fontPresetEl.value = cfg.fontPreset;
@@ -85,6 +92,9 @@ function applyCfgToUI(cfg) {
 	fontWeightEl.value = cfg.fontWeight;
 	bgOpacityEl.value  = cfg.bgOpacity;
 	showOpacityLabel(cfg.bgOpacity);
+	if (includeTiming) {
+		captionExtraSecondsEl.value = normalizeExtraSeconds(cfg.captionExtraSeconds);
+	}
 }
 
 async function writeAndBroadcast() {
@@ -121,7 +131,7 @@ if (presetSelect) {
 			await loadCurrentIntoUI();
 		} else {
 			const presetCfg = PRESETS[choice] || DEFAULTS;
-			applyCfgToUI(presetCfg);
+			applyCfgToUI(presetCfg, false);
 			await writeAndBroadcast();
 		}
 	});
@@ -131,6 +141,7 @@ fontScaleEl.addEventListener("input",  () => { showScaleLabel(fontScaleEl.value)
 fontPresetEl.addEventListener("change", saveAndBroadcast);
 fontWeightEl.addEventListener("change", saveAndBroadcast);
 bgOpacityEl.addEventListener("input",   () => { showOpacityLabel(bgOpacityEl.value); saveAndBroadcast(); });
+captionExtraSecondsEl.addEventListener("input", saveAndBroadcast);
 
 fontColorEl.addEventListener("input", () => {
 	fontColorHex.value = (fontColorEl.value || "").toLowerCase();

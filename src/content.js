@@ -20,7 +20,6 @@
 		fullscreenResizeObserver: null,
 		stopMonitorMain: null,
 		stopMonitorFull: null,
-		hideTimeout: null,
 		// Time-based transcript sync
 		segments: [],
 		currentSegIndex: -1,
@@ -34,8 +33,10 @@
 		fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
 		fontColor: "#ffffff",
 		fontWeight: "500",
-		bgOpacity: 0.61
+		bgOpacity: 0.61,
+		captionExtraSeconds: 0
 	};
+	const BASE_CAPTION_VISIBLE_SECONDS = 7;
 	H.settings = { ...DEFAULTS };
 
 	async function loadSettings() {
@@ -102,6 +103,9 @@
 					recomputeFontSizeNow(player,     captionsText,     13.71, 27.35);
 					recomputeFontSizeNow(fullPlayer, fullCaptionsText, 13.71, 35);
 
+					// Re-evaluate the current caption if its visibility timing changed.
+					if (H.videoListener) H.videoListener();
+
 					// Optional: nudge any observers
 					window.dispatchEvent(new Event("resize"));
 					break;
@@ -155,6 +159,11 @@
 	function getScale() {
 		const s = H.settings?.fontScale ?? 1;
 		return Math.max(0.5, Math.min(2, Number(s) || 1));
+	}
+
+	function getCaptionExtraSeconds() {
+		const seconds = Number(H.settings?.captionExtraSeconds);
+		return Number.isFinite(seconds) && seconds >= 0 ? seconds : 0;
 	}
 
 
@@ -322,6 +331,19 @@
 		return ans;
 	}
 
+	function captionVisibleUntil(index) {
+		const segment = H.segments[index];
+		if (!segment) return -Infinity;
+
+		const scheduledHide =
+			segment.start + BASE_CAPTION_VISIBLE_SECONDS + getCaptionExtraSeconds();
+		const nextStart = H.segments[index + 1]?.start;
+
+		return Number.isFinite(nextStart)
+			? Math.min(scheduledHide, nextStart)
+			: scheduledHide;
+	}
+
 	// Attach a single timeupdate listener (idempotent)
 	function startTimeSync(video, allCaptionTexts) {
 		if (H.videoListener) return;
@@ -330,21 +352,24 @@
 			if (!H.segments || H.segments.length === 0) return;
 			const t = video.currentTime || 0;
 			const i = indexForTime(t);
-			if (i < 0 || i === H.currentSegIndex) return;
+			if (i < 0) return;
 
-			H.currentSegIndex = i;
-			const text = H.segments[i].text;
+			if (i !== H.currentSegIndex) {
+				H.currentSegIndex = i;
+				const text = H.segments[i].text;
+				allCaptionTexts.forEach((el) => {
+					el.textContent = text;
+				});
+			}
+
+			const display = t < captionVisibleUntil(i) ? "block" : "none";
 			allCaptionTexts.forEach((el) => {
-				if (H.hideTimeout) clearTimeout(H.hideTimeout);
-				el.style.display = "block";
-				el.textContent = text;
+				el.style.display = display;
 			});
-			H.hideTimeout = setTimeout(() => {
-				allCaptionTexts.forEach(el => { el.style.display = "none"; });
-			}, 7000);
 		};
 
 		video.addEventListener("timeupdate", H.videoListener);
+		H.videoListener();
 	}
 
 	// Observe transcript changes (e.g., language switch) to rebuild index
